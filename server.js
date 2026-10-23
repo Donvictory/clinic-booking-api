@@ -1,6 +1,7 @@
 require("dotenv").config();
 const { randomUUID, createHash } = require("crypto");
 const express = require("express");
+const cors = require("cors");
 function requireApiKey(req, res, next) {
     const apiKey = req.header("x-api-key");
 
@@ -30,7 +31,6 @@ function createRequestHash(slotId, name, email) {
 async function bookingRateLimiter(req, res, next) {
     const rawEmail = req.body?.email;
 
-    // We need an email address to identify whose limit to check.
     if (typeof rawEmail !== "string" || !rawEmail.trim()) {
         return next();
     }
@@ -44,13 +44,11 @@ async function bookingRateLimiter(req, res, next) {
 
         await client.query("BEGIN");
 
-        // Serialize rate-limit checks for this email address.
         await client.query(
             "SELECT pg_advisory_xact_lock(hashtext($1)::bigint)",
             [email]
         );
 
-        // Count attempts made in the previous 60 seconds.
         const countResult = await client.query(
             `SELECT COUNT(*)::int AS attempts
              FROM booking_attempts
@@ -91,7 +89,6 @@ async function bookingRateLimiter(req, res, next) {
                 });
         }
 
-        // Record this attempt before the booking route validates the request.
         await client.query(
             `INSERT INTO booking_attempts (email)
              VALUES ($1)`,
@@ -132,6 +129,21 @@ const pool = require("./db");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+app.use(
+    cors({
+        origin: [
+            "http://localhost:5173",
+            "https://carepoint-clinic.vercel.app",
+        ],
+        allowedHeaders: [
+            "Content-Type",
+            "x-api-key",
+            "Idempotency-Key",
+        ],
+        methods: ["GET", "POST", "DELETE", "OPTIONS"],
+    })
+);
 
 app.use(express.json());
 app.use(requireApiKey);
@@ -215,7 +227,6 @@ app.post("/bookings", bookingRateLimiter, async (req, res) => {
 
     const idempotencyKey = req.header("Idempotency-Key")?.trim();
 
-    // 1. Validate the request body
     if (!slotId || !name || !email) {
         return res.status(400).json({
             error: "slot_id, name and email are required",
@@ -237,7 +248,6 @@ app.post("/bookings", bookingRateLimiter, async (req, res) => {
         });
     }
 
-    // 2. Fingerprint the normalized booking details
     const requestHash = idempotencyKey
         ? createRequestHash(slotId, name, email)
         : null;
@@ -251,7 +261,6 @@ app.post("/bookings", bookingRateLimiter, async (req, res) => {
         await client.query("BEGIN");
         transactionStarted = true;
 
-        // 3. If a key was supplied, check whether it already exists
         if (idempotencyKey) {
             const keyResult = await client.query(
                 `INSERT INTO idempotency_keys (key, request_hash)
@@ -261,7 +270,6 @@ app.post("/bookings", bookingRateLimiter, async (req, res) => {
                 [idempotencyKey, requestHash]
             );
 
-            // No row inserted means this key already exists
             if (keyResult.rows.length === 0) {
                 const existingKeyResult = await client.query(
                     `SELECT request_hash, response_status, response_body
@@ -363,7 +371,6 @@ app.post("/bookings", bookingRateLimiter, async (req, res) => {
             );
         }
 
-        // 8. Commit the booking and idempotency record together
         await client.query("COMMIT");
         transactionStarted = false;
 
@@ -604,7 +611,6 @@ app.delete("/bookings/:id", async (req, res) => {
             return res.status(200).json(result.rows[0]);
         }
 
-        // No confirmed booking was updated.
         const existingBooking = await pool.query(
             `SELECT id, status
              FROM bookings
