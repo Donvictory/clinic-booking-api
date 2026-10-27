@@ -130,20 +130,52 @@ const pool = require("./db");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(
-    cors({
-        origin: [
-            "http://localhost:5173",
-            "https://carepoint-clinic.vercel.app",
-        ],
-        allowedHeaders: [
-            "Content-Type",
-            "x-api-key",
-            "Idempotency-Key",
-        ],
-        methods: ["GET", "POST", "DELETE", "OPTIONS"],
-    })
-);
+const defaultAllowedOrigins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:4173",
+    "https://carepoint-clinic.vercel.app",
+];
+
+const corsOptions = {
+    origin: (origin, callback) => {
+        if (!origin) {
+            return callback(null, true);
+        }
+
+        const envOrigins = [
+            process.env.FRONTEND_URL,
+            process.env.CLIENT_URL,
+            ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",") : []),
+            ...(process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(",") : []),
+        ]
+            .filter(Boolean)
+            .map((o) => o.trim());
+
+        if (envOrigins.includes("*") || process.env.CORS_ORIGIN === "*") {
+            return callback(null, true);
+        }
+
+        const allOrigins = [...defaultAllowedOrigins, ...envOrigins];
+
+        if (
+            allOrigins.includes(origin) ||
+            /^https:\/\/.*carepoint.*\.vercel\.app$/.test(origin) ||
+            /^https:\/\/.*\.vercel\.app$/.test(origin) ||
+            /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+        ) {
+            return callback(null, true);
+        }
+
+        return callback(null, true);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    exposedHeaders: ["Retry-After"],
+    optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
 
 app.use(express.json());
 app.use(requireApiKey);
