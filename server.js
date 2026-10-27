@@ -594,25 +594,45 @@ app.get("/bookings", async (req, res) => {
 });
 
 
+
 app.delete("/bookings/:id", async (req, res) => {
     const bookingId = req.params.id;
+
+    const email =
+        typeof req.query.email === "string"
+            ? req.query.email.trim().toLowerCase()
+            : "";
+
+    if (!email) {
+        return res.status(400).json({
+            error: "Email is required",
+        });
+    }
 
     try {
         const result = await pool.query(
             `UPDATE bookings
              SET status = 'cancelled'
              WHERE id = $1
+               AND LOWER(email) = $2
                AND status = 'confirmed'
              RETURNING id, slot_id, name, email, status, created_at`,
-            [bookingId]
+            [bookingId, email]
         );
 
         if (result.rows.length > 0) {
+            await pool.query(
+                `UPDATE slots
+                 SET available = TRUE
+                 WHERE id = $1`,
+                [result.rows[0].slot_id]
+            );
+
             return res.status(200).json(result.rows[0]);
         }
 
         const existingBooking = await pool.query(
-            `SELECT id, status
+            `SELECT id, email, status
              FROM bookings
              WHERE id = $1`,
             [bookingId]
@@ -621,6 +641,12 @@ app.delete("/bookings/:id", async (req, res) => {
         if (existingBooking.rows.length === 0) {
             return res.status(404).json({
                 error: "Booking not found",
+            });
+        }
+
+        if (existingBooking.rows[0].email.trim().toLowerCase() !== email) {
+            return res.status(404).json({
+                error: "Booking not found for this email",
             });
         }
 
@@ -636,9 +662,6 @@ app.delete("/bookings/:id", async (req, res) => {
         });
     }
 });
-
-
-
 
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
