@@ -653,13 +653,6 @@ app.delete("/bookings/:id", async (req, res) => {
         );
 
         if (result.rows.length > 0) {
-            await pool.query(
-                `UPDATE slots
-                 SET available = TRUE
-                 WHERE id = $1`,
-                [result.rows[0].slot_id]
-            );
-
             return res.status(200).json(result.rows[0]);
         }
 
